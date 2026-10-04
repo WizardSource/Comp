@@ -1,0 +1,131 @@
+KOMP: KURN block formats for Triton (new files only, no upstream file modified)
+Base: triton v3.8.0 (c01b6774b1865984607d89d89d3a10833de92037)
+
+diff --git a/python/triton/language/extra/kurn/__init__.py b/python/triton/language/extra/kurn/__init__.py
+new file mode 100644
+index 0000000..87b84fa
+--- /dev/null
++++ b/python/triton/language/extra/kurn/__init__.py
+@@ -0,0 +1,122 @@
++"""KURN block formats for Triton kernels (KOMP).
++
++Decode helpers for ggml/KURN low-bit weight formats and ggml's reference activation quantizer, as
++`@jit` functions usable from any Triton kernel (`from triton.language.extra import kurn`). Byte layouts
++are ggml's; KURN's exact references (kurn.formats, kurn.gpu.ref) define the results.
++
++  q4_0   18-byte block of 32: fp16 d, then 16 bytes; byte i holds value i (low nibble) and value
++         i + 16 (high nibble); value = d * (nibble - 8)
++  tq2_0  66-byte block of 256: 64 bytes, then fp16 d; value v sits in byte (v / 128) * 32 + v % 32 at
++         bits 2 * ((v % 128) / 32); value = d * (crumb - 1)
++  q8_0   activations, 34-byte block of 32: fp16 d = amax / 127, q = roundf(x / d) (ggml
++         quantize_row_q8_0_ref: id = 1 / d in f32, q = roundf(x * id))
++
++Only correctly rounded float operations are used, so compiled kernels and the interpreter
++(TRITON_INTERPRET=1) give the same bytes.
++"""
++
++from triton.language import core
++from triton.runtime.jit import jit
++
++import triton.language as tl
++
++
++@jit
++def f16_bits_to_f32(bits):
++    """int16/uint16 tensor holding fp16 bit patterns -> f32 (exact)."""
++    return bits.to(tl.float16, bitcast=True).to(tl.float32)
++
++
++@jit
++def q4_0_lo(qs):
++    """q4_0 quant bytes -> int32 values (low nibble) - 8, in [-8, 7]: values 0..15 of the block."""
++    return (qs & 15).to(tl.int32) - 8
++
++
++@jit
++def q4_0_hi(qs):
++    """q4_0 quant bytes -> int32 values (high nibble) - 8, in [-8, 7]: values 16..31 of the block."""
++    return ((qs >> 4) & 15).to(tl.int32) - 8
++
++
++@jit
++def q4_0_block32(qs):
++    """[R, 16] q4_0 quant bytes -> [R, 32] int32 values in natural order (lo nibbles, then hi nibbles)."""
++    v = tl.join(q4_0_lo(qs), q4_0_hi(qs))  # [R, 16, 2]
++    return tl.reshape(tl.permute(v, (0, 2, 1)), (v.shape[0], 32))
++
++
++@jit
++def tq2_0_trit(qs, J: core.constexpr):
++    """tq2_0 quant bytes -> int32 crumb J (bits 2J..2J+1) - 1, in [-1, 1].
++
++    For quant byte h * 32 + i of a block this is value h * 128 + J * 32 + i."""
++    return ((qs >> (2 * J)) & 3).to(tl.int32) - 1
++
++
++@jit
++def dp4a_emu(a, b, c):
++    """dp4a in plain Triton ops: c + sum of the 4 signed-byte products of int32 words a and b."""
++    p = ((a << 24) >> 24) * ((b << 24) >> 24) + ((a << 16) >> 24) * ((b << 16) >> 24)
++    return c + p + ((a << 8) >> 24) * ((b << 8) >> 24) + (a >> 24) * (b >> 24)
++
++
++@jit
++def dp4a(a, b, c, ASM: core.constexpr):
++    """c + dot of the signed bytes of int32 words a and b. ASM: PTX dp4a.s32.s32 (sm_61+); otherwise dp4a_emu,
++    which the interpreter (TRITON_INTERPRET=1) can run. Both give the same int32 result."""
++    if ASM:
++        return tl.inline_asm_elementwise("dp4a.s32.s32 $0, $1, $2, $3;", "=r,r,r,r", [a, b, c], dtype=tl.int32, is_pure=True,
++                                         pack=1)
++    else:
++        return dp4a_emu(a, b, c)
++
++
++@jit
++def round_half_away(x):
++    """roundf(): nearest integer, halfway cases away from zero (exact for all f32)."""
++    a = tl.abs(x)
++    f = tl.floor(a)
++    r = tl.where(a - f >= 0.5, f + 1.0, f)
++    return tl.where(x < 0, -r, r)
++
++
++@jit
++def round_half_even(x):
++    """nearbyint() in round-to-nearest-even mode (exact for all f32)."""
++    a = tl.abs(x)
++    f = tl.floor(a)
++    d = a - f
++    odd = (f - 2.0 * tl.floor(f * 0.5)) != 0.0
++    r = tl.where((d > 0.5) | ((d == 0.5) & odd), f + 1.0, f)
++    return tl.where(x < 0, -r, r)
++
++
++@jit
++def q8_0_quantize(x):
++    """[B, 32] f32 -> (q int32 [B, 32] in [-127, 127], d f32 [B]): ggml quantize_row_q8_0_ref per row.
++
++    Store d.to(tl.float16) for the block; q is computed from the unrounded f32 d, as in ggml."""
++    amax = tl.max(tl.abs(x), axis=1)
++    d = tl.div_rn(amax, tl.full(amax.shape, 127.0, tl.float32))
++    nz = d != 0.0
++    idv = tl.where(nz, tl.div_rn(tl.full(d.shape, 1.0, tl.float32), tl.where(nz, d, 1.0)), 0.0)
++    q = round_half_away(x * idv[:, None]).to(tl.int32)
++    return q, d
++
++
++@jit
++def q8_K_quantize(x):
++    """[B, 256] f32 -> (q int32 [B, 256] in [-128, 127], d f32 [B]): ggml quantize_row_q8_K_ref per row
++    (largest |x|, first on ties; iscale = -127 / max; q = min(127, nearest-even(iscale * x)); d = 1 / iscale)."""
++    ax = tl.abs(x)
++    amax = tl.max(ax, axis=1)
++    idx = tl.arange(0, x.shape[1])[None, :]
++    first = tl.min(tl.where(ax == amax[:, None], idx, x.shape[1]), axis=1)
++    mx = tl.sum(tl.where(idx == first[:, None], x, 0.0), axis=1)
++    nz = amax != 0.0
++    iscale = tl.div_rn(tl.full(mx.shape, -127.0, tl.float32), tl.where(nz, mx, 1.0))
++    q = tl.minimum(round_half_even(iscale[:, None] * x), 127.0).to(tl.int32)
++    q = tl.where(nz[:, None], q, 0)
++    d = tl.where(nz, tl.div_rn(tl.full(iscale.shape, 1.0, tl.float32), iscale), 0.0)
++    return q, d
