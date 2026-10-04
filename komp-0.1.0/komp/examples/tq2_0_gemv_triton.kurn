@@ -1,0 +1,14 @@
+# TQ2_0 (ternary, BitNet b1.58) decode-GEMV through KOMP
+kernel     tq2_0_gemv_triton
+op         gemv
+weights    tq2_0
+target     triton
+arch       sm_80
+mode       dp4a
+block_n    64
+nb         1
+num_warps  4
+n          37        # verify shape: a row tail, 3 K blocks of 256 (not a multiple of nb=2), 3 activation columns
+k          768
+m          3
+tune       mode=dp4a,bytes block_n=32,64 nb=1,2
