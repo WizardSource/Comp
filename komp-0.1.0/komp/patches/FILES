@@ -1,2 +1,0 @@
-# Files the KOMP patch series adds to upstream Triton (paths relative to third_party/triton).
-python/triton/language/extra/kurn/__init__.py
