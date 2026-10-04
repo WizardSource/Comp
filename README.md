@@ -1,18 +1,18 @@
-# KOMP
+# COMP
 
-KOMP is a KURN-based fork of Triton. KURN is "a tool that writes the math AI models run on": it defines quantized
-weight formats, their exact references, data layouts and an energy-ranked tuner. KOMP takes that math to GPUs
+COMP is a KURN-based fork of Triton. KURN is "a tool that writes the math AI models run on": it defines quantized
+weight formats, their exact references, data layouts and an energy-ranked tuner. COMP takes that math to GPUs
 through Triton's compiler (MLIR/LLVM), and keeps the fork as small as possible so it can follow upstream.
 
-**Private for now.** Do not push KOMP to a public remote or propose it upstream. Publishing needs the owner's
+**Private for now.** Do not push COMP to a public remote or propose it upstream. Publishing needs the owner's
 employer check first.
 
-## What KOMP is
+## What COMP is
 
 - A **minimal fork** of upstream Triton: one added Python module, `triton.language.extra.kurn`, with KURN's format
   helpers for Triton kernels.
-- The **`komp` package**: Triton kernels built on that module, verification against KURN's exact references, a
-  no-GPU compile and inspection tool, and `target triton` specs so KURN drives KOMP kernels.
+- The **`COMP` package**: Triton kernels built on that module, verification against KURN's exact references, a
+  no-GPU compile and inspection tool, and `target triton` specs so KURN drives COMP kernels.
 
 | kernel | what it does |
 |---|---|
@@ -42,44 +42,44 @@ Each GEMV has two modes:
 
   Only correctly rounded float operations are used, so compiled kernels and the interpreter produce the same bytes.
 
-Fetching the upstream tree (only needed to apply or edit the patch; running KOMP does not need it):
+Fetching the upstream tree (only needed to apply or edit the patch; running COMP does not need it):
 
 ```sh
-git submodule update --init --depth 1 komp/third_party/triton
+git submodule update --init --depth 1 COMP/third_party/triton
 # or, outside this repository:
-git clone --depth 1 --branch v3.8.0 https://github.com/triton-lang/triton komp/third_party/triton
+git clone --depth 1 --branch v3.8.0 https://github.com/triton-lang/triton COMP/third_party/triton
 ```
 
 ## Install
 
-KOMP runs on the stock `triton==3.8.0` wheel. The diff is pure Python, so the compiled part (`libtriton`, LLVM)
+COMP runs on the stock `triton==3.8.0` wheel. The diff is pure Python, so the compiled part (`libtriton`, LLVM)
 stays byte-identical to upstream's and no LLVM build is needed.
 
 ```sh
 pip install triton==3.8.0 torch numpy
-pip install -e kurn -e komp              # KURN and KOMP from this repository
-komp/tools/install_fork.sh python3       # apply the patch series, copy the added file into triton 3.8.0
-komp fork                                # status: pin, patch series, where the module comes from
+pip install -e kurn -e COMP              # KURN and COMP from this repository
+COMP/tools/install_fork.sh python3       # apply the patch series, copy the added file into triton 3.8.0
+COMP fork                                # status: pin, patch series, where the module comes from
 ```
 
-- **Uninstall:** `komp/tools/install_fork.sh python3 --uninstall` removes the added file again.
-- **Without installing anything into triton:** if `triton.language.extra.kurn` is not installed, `komp` loads it
-  straight from the patch file (cached under `~/.cache/komp`, or `$KOMP_CACHE`). The GPU kit does this.
+- **Uninstall:** `COMP/tools/install_fork.sh python3 --uninstall` removes the added file again.
+- **Without installing anything into triton:** if `triton.language.extra.kurn` is not installed, `COMP` loads it
+  straight from the patch file (cached under `~/.cache/COMP`, or `$COMP_CACHE`). The GPU kit does this.
 - **Changing the fork:** edit files under `third_party/triton` that are listed in `patches/FILES`, then run
   `tools/make_patch.sh`. `tools/apply_patches.sh` re-applies the series and checks the pin.
 
 ## Use
 
 ```sh
-komp verify --all                         # the full check set, in the Triton interpreter (TRITON_INTERPRET=1 is set for you)
-komp verify komp/examples/q4_0_gemv_triton.kurn       # every config in a spec's tune space
-komp gen komp/examples/tq2_0_gemv_triton.kurn arch=sm_90 -o out/   # PTX, TTGIR, cubin; registers, spills, SASS mix
-komp mix --archs sm_80,sm_90              # hot-loop instructions per weight: KOMP vs KURN-CUDA (KURN rows need nvcc)
-python -m pytest komp/tests
+COMP verify --all                         # the full check set, in the Triton interpreter (TRITON_INTERPRET=1 is set for you)
+COMP verify COMP/examples/q4_0_gemv_triton.kurn       # every config in a spec's tune space
+COMP gen COMP/examples/tq2_0_gemv_triton.kurn arch=sm_90 -o out/   # PTX, TTGIR, cubin; registers, spills, SASS mix
+COMP mix --archs sm_80,sm_90              # hot-loop instructions per weight: COMP vs KURN-CUDA (KURN rows need nvcc)
+python -m pytest COMP/tests
 ```
 
-**From KURN.** `kurn check|gen|verify SPEC` runs KOMP when the spec says `target triton`. The routing is one file in
-KURN, `kurn/src/kurn/ext/komp.py`. Example spec:
+**From KURN.** `kurn check|gen|verify SPEC` runs COMP when the spec says `target triton`. The routing is one file in
+KURN, `kurn/src/kurn/ext/COMP.py`. Example spec:
 
 ```
 kernel     q4_0_gemv_triton
@@ -96,9 +96,9 @@ tune       mode=dp4a,bytes block_n=32,64 nb=4,8
 
 ## What is verified (on a CPU-only machine)
 
-**In the Triton interpreter:** `komp verify --all`, 77 checks, 0 failures.
+**In the Triton interpreter:** `COMP verify --all`, 77 checks, 0 failures.
 - **dp4a fallback:** it equals PTX `dp4a.s32.s32` semantics on 1,024 edge-case and random words.
-- **Quantizer bytes:** the q8_0 and q8_K blocks from KOMP's quantizers equal ggml's reference quantizers
+- **Quantizer bytes:** the q8_0 and q8_K blocks from COMP's quantizers equal ggml's reference quantizers
   (`kurn.gpu.ref`) byte for byte.
 - **Decode:** every Q4_0 and TQ2_0 value equals KURN's reference values (`kurn.formats`). A TQ2_0 dot product built
   from the decoded values equals `kurn.formats.reference_dot` exactly.
@@ -121,10 +121,10 @@ Hot-loop instruction mix per weight on sm_80 (static counts from SASS, using KUR
 
 | kernel | instructions | integer | dp4a | weight loads |
 |---|---|---|---|---|
-| KOMP Q4_0, `bytes` (64/4/4 warps) | 5.9 | 5.5 | 0 | 128-bit |
-| KOMP Q4_0, `dp4a` (64/4/4 warps) | 1.9 | 1.1 | 0.28 | 128-bit |
+| COMP Q4_0, `bytes` (64/4/4 warps) | 5.9 | 5.5 | 0 | 128-bit |
+| COMP Q4_0, `dp4a` (64/4/4 warps) | 1.9 | 1.1 | 0.28 | 128-bit |
 | KURN-CUDA Q4_0, default | 1.7 | 1.2 | 0.25 | 128-bit |
-| KOMP TQ2_0, `dp4a` (64/1/4 warps) | 1.3 | 0.8 | 0.28 | 128-bit |
+| COMP TQ2_0, `dp4a` (64/1/4 warps) | 1.3 | 0.8 | 0.28 | 128-bit |
 | KURN-CUDA TQ2_0, default | 2.0 | 1.4 | 0.25 | mostly 32-bit |
 
 ## Status and limits
@@ -139,7 +139,7 @@ Hot-loop instruction mix per weight on sm_80 (static counts from SASS, using KUR
 ## Next steps
 
 1. **A100 run** through KURN's GPU kit (`kurn/contrib/gpu-check`): check the dp4a kernels on hardware, time them
-   against KURN-CUDA, ggml-cuda and cuBLAS, and tune the KOMP configs.
+   against KURN-CUDA, ggml-cuda and cuBLAS, and tune the COMP configs.
 2. **Batched GEMM** with `tl.dot` and exact per-block scales (f16 and int8 tensor-core variants). This is where
    Triton should help KURN most.
 3. **More formats:** Q8_0, Q4_K, IQ4_NL, Q2_0, Q1_0, E8P.
@@ -149,9 +149,9 @@ Hot-loop instruction mix per weight on sm_80 (static counts from SASS, using KUR
 
 ## License
 
-- **KOMP's own code: MIT** (`LICENSE`), matching KURN and ggml.
+- **COMP's own code: MIT** (`LICENSE`), matching KURN and ggml.
 - **Triton: MIT.** Keep Triton's copyright and license notices with any copy of the fork or its patch.
 - **LLVM** (linked into the triton wheel): Apache-2.0 with LLVM exceptions. Keep its license and NOTICE when
-  redistributing the wheel. The exception means kernels compiled by KOMP carry no LLVM obligations.
-- **`ptxas`, `cuobjdump` and `nvdisasm`** ship inside the triton wheel under NVIDIA's CUDA EULA. KOMP uses them but
+  redistributing the wheel. The exception means kernels compiled by COMP carry no LLVM obligations.
+- **`ptxas`, `cuobjdump` and `nvdisasm`** ship inside the triton wheel under NVIDIA's CUDA EULA. COMP uses them but
   does not redistribute them.
